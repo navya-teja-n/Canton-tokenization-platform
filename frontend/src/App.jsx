@@ -9,12 +9,12 @@ import RepoPage from './pages/RepoPage.jsx'
 import SettlementMonitorPage from './pages/SettlementMonitorPage.jsx'
 
 const NAV_ITEMS = [
-  { to: '/kyc', label: 'KYC' },
   { to: '/wallets', label: 'Wallets' },
   { to: '/assets', label: 'Assets & Deposits' },
   { to: '/trading', label: 'Trading Desk' },
   { to: '/repo', label: 'Repo Desk' },
-  { to: '/settlement', label: 'Settlement Monitor' }
+  { to: '/settlement', label: 'Settlement Monitor' },
+  { to: '/kyc', label: 'KYC' }
 ]
 
 function PartySwitcher() {
@@ -41,6 +41,7 @@ function Shell() {
           Canton Tokenization &amp; Deposit Network
           <small>Institutional reference platform</small>
         </div>
+        <PartySwitcher />
         <nav className="nav-list">
           {NAV_ITEMS.map((item) => (
             <NavLink key={item.to} to={item.to} className={({ isActive }) => (isActive ? 'active' : '')}>
@@ -48,18 +49,17 @@ function Shell() {
             </NavLink>
           ))}
         </nav>
-        <PartySwitcher />
       </aside>
       <main className="main">
         <Routes>
-          <Route path="/" element={<Navigate to="/kyc" replace />} />
+          <Route path="/" element={<Navigate to="/wallets" replace />} />
           <Route path="/kyc" element={<KycPage />} />
           <Route path="/wallets" element={<WalletsPage />} />
           <Route path="/assets" element={<AssetsPage />} />
           <Route path="/trading" element={<TradingPage />} />
           <Route path="/repo" element={<RepoPage />} />
           <Route path="/settlement" element={<SettlementMonitorPage />} />
-          <Route path="*" element={<Navigate to="/kyc" replace />} />
+          <Route path="*" element={<Navigate to="/wallets" replace />} />
         </Routes>
       </main>
     </div>
