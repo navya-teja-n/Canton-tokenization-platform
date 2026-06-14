@@ -1,0 +1,18 @@
+# Render Blueprint for the Spring Boot backend.
+#
+# To use: in the Render dashboard, "New" -> "Blueprint", point it at this
+# GitHub repo. Render will detect this file and provision the service
+# below automatically. (You can also create the web service manually and
+# ignore this file -- see backend/README.md.)
+
+services:
+  - type: web
+    name: canton-tokenization-backend
+    runtime: docker
+    rootDir: backend
+    dockerfilePath: ./Dockerfile
+    plan: free
+    healthCheckPath: /actuator/health
+    envVars:
+      - key: SPRING_PROFILES_ACTIVE
+        value: default

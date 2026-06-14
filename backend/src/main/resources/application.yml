@@ -3,7 +3,9 @@ spring:
     name: institutional-tokenization-backend
 
 server:
-  port: 8080
+  # Render (and most PaaS providers) inject a PORT env var the app must
+  # bind to; falls back to 8080 for local development.
+  port: ${PORT:8080}
 
 springdoc:
   api-docs:
