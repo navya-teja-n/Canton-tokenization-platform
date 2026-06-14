@@ -1,0 +1,99 @@
+module KYC.KycService where
+
+import Roles.Types
+
+-- | A KYC verification request submitted by a prospective participant.
+-- The KYC provider (e.g. a regulated KYC utility, observed by the
+-- Regulator) reviews the request and either approves or rejects it.
+--
+-- This models the "simulated KYC verification service" required before any
+-- participant can hold a Wallet or transact on the network.
+template KycRequest
+  with
+    applicant   : Party
+    kycProvider : Party
+    regulator   : Party
+    legalName   : Text
+    jurisdiction : Text
+    submittedAt : Time
+  where
+    signatory applicant
+    observer kycProvider, regulator
+
+    ensure legalName /= "" && jurisdiction /= ""
+
+    -- | KYC provider approves the request, producing a KycApproval contract
+    -- that downstream templates (e.g. Wallet) require as a precondition.
+    choice Approve : ContractId KycApproval
+      with
+        approvedAt : Time
+        riskRating : Text
+      controller kycProvider
+      do
+        create KycApproval with
+          applicant
+          kycProvider
+          regulator
+          legalName
+          jurisdiction
+          status = KycApproved
+          riskRating
+          approvedAt
+
+    -- | KYC provider rejects the request.
+    choice Reject : ContractId KycApproval
+      with
+        rejectedAt : Time
+        reason     : Text
+      controller kycProvider
+      do
+        create KycApproval with
+          applicant
+          kycProvider
+          regulator
+          legalName
+          jurisdiction
+          status = KycRejected
+          riskRating = reason
+          approvedAt = rejectedAt
+
+-- | The outcome of a KYC review. Wallet creation requires a KycApproval
+-- contract with status == KycApproved, owned by the same applicant.
+template KycApproval
+  with
+    applicant    : Party
+    kycProvider  : Party
+    regulator    : Party
+    legalName    : Text
+    jurisdiction : Text
+    status       : KycStatus
+    riskRating   : Text
+    approvedAt   : Time
+  where
+    signatory kycProvider
+    observer applicant, regulator
+
+    key (kycProvider, applicant) : (Party, Party)
+    maintainer key._1
+
+    -- | Regulator or KYC provider can revoke an approval (e.g. sanctions
+    -- hit, periodic re-KYC failure). Existing wallets remain but new
+    -- asset-affecting choices that re-check KYC will fail.
+    choice Revoke : ContractId KycApproval
+      with
+        revokedBy : Party
+        revokedAt : Time
+        reason    : Text
+      controller regulator
+      do
+        create this with
+          status = KycRevoked
+          riskRating = reason
+          approvedAt = revokedAt
+
+    -- | Convenience: true if this approval currently authorizes the holder
+    -- to participate (used by Wallet / asset templates).
+    nonconsuming choice IsActive : Bool
+      controller applicant
+      do
+        pure (status == KycApproved)

@@ -1,0 +1,133 @@
+module Assets.Deposit where
+
+import Roles.Types
+
+-- | A tokenized bank deposit: an on-ledger representation of a bank's
+-- liability to the depositor. `bank` is the issuing institution (sole
+-- signatory, representing the liability on its balance sheet); `owner`
+-- is the current holder/beneficiary of the deposit. Transferable between
+-- participants and usable as the cash leg of DvP trade and repo
+-- settlement.
+template TokenizedDeposit
+  with
+    bank      : Party   -- issuing bank / liability holder
+    owner     : Party    -- depositor / current beneficial holder
+    regulator : Party
+    depositId : Text
+    currency  : Text
+    amount    : Decimal
+    issuedAt  : Time
+    frozen    : Bool     -- restricted-access flag (regulatory hold)
+  where
+    signatory bank
+    observer owner, regulator
+
+    ensure amount > 0.0
+
+    key (bank, depositId) : (Party, Text)
+    maintainer bank
+
+    -- | Transfer (all or part of) this deposit to a new owner. Splitting
+    -- preserves the immutable, contract-based state-transition model:
+    -- the original contract is archived and one or two new contracts are
+    -- created.
+    choice TransferDeposit : ContractId TokenizedDeposit
+      with
+        newOwner       : Party
+        transferAmount : Decimal
+        newDepositId   : Text
+      controller owner
+      do
+        assertMsg "Deposit is frozen and cannot be transferred" (not frozen)
+        assertMsg "Transfer amount must be positive" (transferAmount > 0.0)
+        assertMsg "Insufficient deposit balance" (transferAmount <= amount)
+        let remainder = amount - transferAmount
+        when (remainder > 0.0) $ do
+          _ <- create this with amount = remainder
+          pure ()
+        create this with
+          owner = newOwner
+          depositId = newDepositId
+          amount = transferAmount
+          issuedAt = issuedAt
+
+    -- | Used by the settlement engine: pay an exact amount to a
+    -- counterparty as part of an atomic DvP / repo settlement. Functionally
+    -- identical to TransferDeposit but named for clarity in settlement
+    -- workflows and intended to be called from `Trading.Trade` /
+    -- `Repo.Repo` settlement choices via multi-party transactions.
+    choice PayTo : ContractId TokenizedDeposit
+      with
+        payee        : Party
+        payAmount    : Decimal
+        newDepositId : Text
+      controller owner
+      do
+        assertMsg "Deposit is frozen and cannot be used for payment" (not frozen)
+        assertMsg "Payment amount must be positive" (payAmount > 0.0)
+        assertMsg "Insufficient deposit balance for payment" (payAmount <= amount)
+        let remainder = amount - payAmount
+        when (remainder > 0.0) $ do
+          _ <- create this with amount = remainder
+          pure ()
+        create this with
+          owner = payee
+          depositId = newDepositId
+          amount = payAmount
+          issuedAt = issuedAt
+
+    -- | Regulator places a hold on this deposit (e.g. sanctions, court
+    -- order). Authority of `bank` (the sole signatory) is available to
+    -- the choice because exercising delegates signatory authority.
+    choice Freeze : ContractId TokenizedDeposit
+      with
+        reason : Text
+      controller regulator
+      do
+        create this with frozen = True
+
+    -- | Regulator lifts a hold.
+    choice Unfreeze : ContractId TokenizedDeposit
+      controller regulator
+      do
+        create this with frozen = False
+
+    -- | Issuing bank redeems (extinguishes) the deposit, e.g. for an
+    -- off-ledger fiat withdrawal. Terminal state-transition: archives the
+    -- contract with no successor.
+    choice RedeemForFiat : ()
+      with
+        redemptionRef : Text
+      controller owner
+      do
+        assertMsg "Deposit is frozen and cannot be redeemed" (not frozen)
+        pure ()
+
+-- | Helper used by issuance flows: a bank issues a brand-new tokenized
+-- deposit directly to a KYC-approved owner's wallet currency balance.
+template DepositIssuanceRequest
+  with
+    bank      : Party
+    owner     : Party
+    regulator : Party
+    depositId : Text
+    currency  : Text
+    amount    : Decimal
+  where
+    signatory bank
+    observer owner, regulator
+
+    choice IssueDeposit : ContractId TokenizedDeposit
+      with
+        issuedAt : Time
+      controller bank
+      do
+        create TokenizedDeposit with
+          bank
+          owner
+          regulator
+          depositId
+          currency
+          amount
+          issuedAt
+          frozen = False

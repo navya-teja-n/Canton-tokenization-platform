@@ -1,0 +1,228 @@
+module Wallet.Wallet where
+
+import DA.List (filter)
+import Roles.Types
+import KYC.KycService
+
+-- | A single position held in a custodial wallet. `instrumentId` references
+-- the `instrumentId` field on the corresponding asset/deposit contract
+-- (Bond.daml / Deposit.daml). Quantity is in face-value units (bonds /
+-- treasuries / deposits all use face-value-style accounting for simplicity).
+data WalletHolding = WalletHolding
+  with
+    assetClass   : AssetClass
+    instrumentId : Text
+    quantity     : Decimal
+    locked       : Bool   -- true while pledged as repo/trade collateral
+  deriving (Eq, Show)
+
+-- | A KYC-gated request to open a custodial wallet. The custodian validates
+-- the applicant's KYC approval before the wallet is created, which is the
+-- enforcement point for "only verified identities can hold a wallet".
+template WalletApplication
+  with
+    owner       : Party  -- the institution / investor who will own the wallet
+    custodian   : Party  -- regulated custodian operating the ledger node
+    regulator   : Party  -- supervisory observer
+    kycProvider : Party
+    walletId    : Text
+  where
+    signatory owner
+    observer custodian, regulator
+
+    -- | Custodian opens the wallet only if a matching, approved KYC record
+    -- exists for the applicant.
+    choice OpenWallet : ContractId Wallet
+      with
+        kycApprovalCid : ContractId KycApproval
+      controller custodian
+      do
+        kyc <- fetch kycApprovalCid
+        assertMsg "KYC approval does not belong to applicant" (kyc.applicant == owner)
+        assertMsg "KYC provider mismatch" (kyc.kycProvider == kycProvider)
+        assertMsg "KYC must be in APPROVED status to open a wallet" (kyc.status == KycApproved)
+        create Wallet with
+          owner
+          custodian
+          regulator
+          kycProvider
+          walletId
+          holdings = []
+          cashBalances = []
+
+-- | A KYC-gated custodial wallet. `owner` and `custodian` are joint
+-- signatories (the custodian operates the node and co-authorizes every
+-- balance change; the owner authorizes disposal of their own assets).
+-- The regulator is an observer for supervisory visibility, satisfying the
+-- "strict privacy with regulator visibility" requirement.
+template Wallet
+  with
+    owner        : Party
+    custodian    : Party
+    regulator    : Party
+    kycProvider  : Party
+    walletId     : Text
+    holdings     : [WalletHolding]      -- tokenized asset positions
+    cashBalances : [Money]              -- tokenized-deposit cash balances
+  where
+    signatory owner, custodian
+    observer regulator
+
+    key (custodian, walletId) : (Party, Text)
+    maintainer custodian
+
+    -- | Credit a tokenized asset position (called when an asset is issued
+    -- to, or transferred into, this wallet).
+    choice CreditAsset : ContractId Wallet
+      with
+        assetClass   : AssetClass
+        instrumentId : Text
+        quantity     : Decimal
+      controller custodian
+      do
+        let existing = find (\h -> h.instrumentId == instrumentId && not h.locked) holdings
+        let newHoldings = case existing of
+              Some h ->
+                map (\x -> if x == h
+                            then x with quantity = x.quantity + quantity
+                            else x) holdings
+              None -> holdings <> [WalletHolding with assetClass, instrumentId, quantity, locked = False]
+        create this with holdings = newHoldings
+
+    -- | Debit a tokenized asset position (called on transfer-out, repo
+    -- collateral pledge realization, or redemption).
+    choice DebitAsset : ContractId Wallet
+      with
+        instrumentId : Text
+        quantity     : Decimal
+      controller owner
+      do
+        let existing = find (\h -> h.instrumentId == instrumentId && not h.locked) holdings
+        case existing of
+          None -> error ("No unlocked holding found for instrument " <> instrumentId)
+          Some h -> do
+            assertMsg "Insufficient unlocked balance" (h.quantity >= quantity)
+            let newHoldings =
+                  if h.quantity == quantity
+                    then DA.List.filter (/= h) holdings
+                    else map (\x -> if x == h then x with quantity = x.quantity - quantity else x) holdings
+            create this with holdings = newHoldings
+
+    -- | Lock a quantity of an instrument as collateral (repo / trade margin).
+    -- Locked holdings cannot be debited via DebitAsset, enforcing that
+    -- pledged collateral cannot be double-spent.
+    choice LockCollateral : ContractId Wallet
+      with
+        instrumentId : Text
+        quantity     : Decimal
+      controller owner
+      do
+        let existing = find (\h -> h.instrumentId == instrumentId && not h.locked) holdings
+        case existing of
+          None -> error ("No unlocked holding found for instrument " <> instrumentId)
+          Some h -> do
+            assertMsg "Insufficient unlocked balance to lock" (h.quantity >= quantity)
+            let remaining = h.quantity - quantity
+                lockedHolding = WalletHolding with
+                  assetClass = h.assetClass, instrumentId, quantity, locked = True
+                rest = DA.List.filter (/= h) holdings
+                rebuilt = if remaining > 0.0
+                            then rest <> [h with quantity = remaining, locked = False, ] <> [lockedHolding]
+                            else rest <> [lockedHolding]
+            create this with holdings = rebuilt
+
+    -- | Release previously locked collateral back to available balance
+    -- (repo repurchase completed, or trade cancelled).
+    choice ReleaseCollateral : ContractId Wallet
+      with
+        instrumentId : Text
+        quantity     : Decimal
+      controller custodian
+      do
+        let existing = find (\h -> h.instrumentId == instrumentId && h.locked) holdings
+        case existing of
+          None -> error ("No locked holding found for instrument " <> instrumentId)
+          Some h -> do
+            assertMsg "Insufficient locked balance to release" (h.quantity >= quantity)
+            let remainingLocked = h.quantity - quantity
+                rest = DA.List.filter (/= h) holdings
+                released = WalletHolding with
+                  assetClass = h.assetClass, instrumentId, quantity, locked = False
+                rebuilt = if remainingLocked > 0.0
+                            then rest <> [h with quantity = remainingLocked] <> [released]
+                            else rest <> [released]
+            -- merge released amount into any existing unlocked holding
+            let merged = mergeHolding rebuilt released
+            create this with holdings = merged
+
+    -- | Forfeit locked collateral to a counterparty wallet on repo default.
+    -- Consuming choice: archives this wallet's holding of the collateral.
+    choice ForfeitCollateral : ContractId Wallet
+      with
+        instrumentId : Text
+        quantity     : Decimal
+      controller custodian
+      do
+        let existing = find (\h -> h.instrumentId == instrumentId && h.locked) holdings
+        case existing of
+          None -> error ("No locked holding found for instrument " <> instrumentId)
+          Some h -> do
+            assertMsg "Insufficient locked balance to forfeit" (h.quantity >= quantity)
+            let remainingLocked = h.quantity - quantity
+                rest = DA.List.filter (/= h) holdings
+                rebuilt = if remainingLocked > 0.0
+                            then rest <> [h with quantity = remainingLocked]
+                            else rest
+            create this with holdings = rebuilt
+
+    -- | Credit a cash (tokenized deposit) balance.
+    choice CreditCash : ContractId Wallet
+      with
+        amount : Money
+      controller custodian
+      do
+        let newBalances = mergeMoney cashBalances amount
+        create this with cashBalances = newBalances
+
+    -- | Debit a cash (tokenized deposit) balance.
+    choice DebitCash : ContractId Wallet
+      with
+        amount : Money
+      controller owner
+      do
+        let existing = find (\m -> m.currency == amount.currency) cashBalances
+        case existing of
+          None -> error ("No cash balance in currency " <> amount.currency)
+          Some m -> do
+            assertMsg "Insufficient cash balance" (m.amount >= amount.amount)
+            let newBalances = map (\x -> if x.currency == amount.currency
+                                          then x with amount = x.amount - amount.amount
+                                          else x) cashBalances
+            create this with cashBalances = newBalances
+
+    -- | Read-only view used by the backend to render wallet contents
+    -- without mutating state.
+    nonconsuming choice GetSummary : (Party, Text, [WalletHolding], [Money])
+      controller owner
+      do
+        pure (owner, walletId, holdings, cashBalances)
+
+-- helper: merge a freshly-released holding into an existing unlocked one
+mergeHolding : [WalletHolding] -> WalletHolding -> [WalletHolding]
+mergeHolding hs h =
+  let others = DA.List.filter (\x -> not (x.instrumentId == h.instrumentId && not x.locked && x /= h)) hs
+      match  = find (\x -> x.instrumentId == h.instrumentId && not x.locked && x /= h) hs
+  in case match of
+       None -> hs
+       Some m -> DA.List.filter (/= m) (DA.List.filter (/= h) hs)
+                   <> [m with quantity = m.quantity + h.quantity]
+
+-- helper: merge a cash amount into existing balances, adding a new currency
+-- entry if none exists yet
+mergeMoney : [Money] -> Money -> [Money]
+mergeMoney balances m =
+  case find (\x -> x.currency == m.currency) balances of
+    None -> balances <> [m]
+    Some existing -> map (\x -> if x.currency == m.currency
+                                 then x with amount = x.amount + m.amount
+                                 else x) balances

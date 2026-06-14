@@ -1,0 +1,26 @@
+# Java / Maven
+target/
+*.class
+*.jar
+!.mvn/wrapper/maven-wrapper.jar
+
+# Scala / sbt
+integration/target/
+integration/project/target/
+integration/project/project/
+*.tasty
+
+# Node / frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.env
+
+# DAML
+daml/.daml/
+*.dar
+
+# OS / editor
+.DS_Store
+*.log
+.idea/
+.vscode/

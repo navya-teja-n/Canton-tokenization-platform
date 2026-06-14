@@ -1,0 +1,8 @@
+Initial commit: Canton tokenization & deposit network reference platform
+
+- DAML templates: KYC, custodial wallets, bond/treasury/deposit tokenization, DvP trading, repo lifecycle
+- Java/Spring Boot backend: REST API, in-memory Canton Ledger simulator, event bus, idempotency/retry
+- Scala/Pekko integration layer: Ledger API client mirror, JSON codecs, HTTP gateway
+- React/Vite frontend: KYC, wallets, assets/deposits, trading desk, repo desk, settlement monitor
+- Docs: architecture, ledger integration mapping, API reference
+- GitHub Pages deploy workflow for frontend

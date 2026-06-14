@@ -1,0 +1,84 @@
+module Roles.Types where
+
+import DA.Time ()
+
+-- | Shared enums and value types used across the platform.
+-- Kept in one module so every contract refers to the same canonical
+-- vocabulary (mirrors a shared "common" Java package on the backend side).
+
+-- | High-level participant roles in the network. A single legal entity
+-- (Party) may hold more than one role in different contracts, but each
+-- contract is explicit about which role a party plays.
+data ParticipantRole
+  = Issuer
+  | Custodian
+  | Buyer
+  | Seller
+  | Lender
+  | Borrower
+  | Regulator
+  | KycProvider
+  deriving (Eq, Show)
+
+-- | Asset classes supported by the tokenization engine.
+data AssetClass
+  = GovernmentBondClass
+  | TreasuryBillClass
+  | TokenizedDepositClass
+  deriving (Eq, Show)
+
+-- | Lifecycle status of an issued financial instrument.
+data InstrumentStatus
+  = Active
+  | Collateralized
+  | Matured
+  | Redeemed
+  | Defaulted
+  deriving (Eq, Show)
+
+-- | Status of a bilateral trade.
+data TradeStatus
+  = Proposed
+  | Accepted
+  | Settled
+  | Rejected
+  | Cancelled
+  deriving (Eq, Show)
+
+-- | Status of a repurchase agreement.
+data RepoStatus
+  = RepoOpen          -- collateral locked, cash transferred
+  | RepoMatured       -- maturity reached, awaiting repurchase settlement
+  | RepoClosed        -- repurchased: collateral returned, cash + interest repaid
+  | RepoDefaulted     -- borrower failed to repurchase; lender entitled to collateral
+  deriving (Eq, Show)
+
+-- | KYC status of a participant.
+data KycStatus
+  = KycPending
+  | KycApproved
+  | KycRejected
+  | KycRevoked
+  deriving (Eq, Show)
+
+-- | A simple monetary amount tagged with an ISO currency code.
+data Money = Money
+  with
+    currency : Text
+    amount   : Decimal
+  deriving (Eq, Show)
+
+addMoney : Money -> Money -> Money
+addMoney a b
+  | a.currency /= b.currency = error "Currency mismatch in addMoney"
+  | otherwise = Money with currency = a.currency, amount = a.amount + b.amount
+
+subMoney : Money -> Money -> Money
+subMoney a b
+  | a.currency /= b.currency = error "Currency mismatch in subMoney"
+  | otherwise = Money with currency = a.currency, amount = a.amount - b.amount
+
+-- | Simple day-count based interest accrual: principal * rate * (days / 360).
+accrueInterest : Decimal -> Decimal -> Int -> Decimal
+accrueInterest principal annualRatePct days =
+  principal * (annualRatePct / 100.0) * (intToDecimal days / 360.0)

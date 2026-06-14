@@ -1,0 +1,38 @@
+spring:
+  application:
+    name: institutional-tokenization-backend
+
+server:
+  port: 8080
+
+springdoc:
+  api-docs:
+    path: /api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+
+logging:
+  level:
+    root: INFO
+    com.canton.platform: DEBUG
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss} [%X{correlationId}] %-5level %logger{36} - %msg%n"
+
+platform:
+  ledger:
+    # Simulated Canton participant/ledger identifiers (would map to real
+    # Canton domain + participant ids in production)
+    participant-id: participant1
+    ledger-id: canton-sim-ledger
+  retry:
+    max-attempts: 3
+    initial-backoff-ms: 200
+    multiplier: 2.0
+  idempotency:
+    ttl-seconds: 3600

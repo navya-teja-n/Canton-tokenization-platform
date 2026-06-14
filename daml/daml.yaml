@@ -1,0 +1,14 @@
+sdk-version: 2.8.0
+name: institutional-tokenization-platform
+source: daml
+version: 0.1.0
+description: >
+  Canton-inspired institutional tokenization engine and blockchain-based
+  deposit network: tokenized bonds, treasuries, deposits, repos, KYC-gated
+  custodial wallets, and DvP trade/settlement workflows.
+dependencies:
+  - daml-prim
+  - daml-stdlib
+  - daml-script
+build-options:
+  - --target=2.1

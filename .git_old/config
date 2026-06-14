@@ -1,0 +1,10 @@
+[core]
+	repositoryformatversion = 0
+	filemode = true
+	bare = false
+	logallrefupdates = true
+	symlinks = false
+	ignorecase = true
+[remote "origin"]
+	url = https://github.com/navya-teja-n/Canton-tokenization-platform.git
+	fetch = +refs/heads/*:refs/remotes/origin/*

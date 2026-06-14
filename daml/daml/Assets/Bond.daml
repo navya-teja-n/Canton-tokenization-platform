@@ -1,0 +1,275 @@
+module Assets.Bond where
+
+import Roles.Types
+import Assets.Deposit
+
+-- =============================================================================
+-- Government Bond
+-- =============================================================================
+
+-- | A tokenized government bond. `issuer` (e.g. a sovereign debt agency,
+-- represented on the ledger by an issuing participant) is the sole
+-- signatory -- it stands behind the instrument's face value and coupon.
+-- `owner` is the current beneficial holder. Coupon payments are modeled as
+-- an off-chain/periodic process that credits a TokenizedDeposit (left as an
+-- orchestration concern in the backend `service` layer for brevity).
+template GovernmentBond
+  with
+    issuer           : Party
+    owner            : Party
+    custodian        : Party
+    regulator        : Party
+    instrumentId     : Text
+    isin             : Text
+    currency         : Text
+    faceValuePerUnit : Decimal
+    quantity         : Decimal
+    couponRatePct    : Decimal
+    issueDate        : Date
+    maturityDate     : Date
+    status           : InstrumentStatus
+  where
+    signatory issuer
+    observer owner, custodian, regulator
+
+    ensure quantity > 0.0 && faceValuePerUnit > 0.0
+
+    key (issuer, instrumentId, owner) : (Party, Text, Party)
+    maintainer issuer
+
+    -- | Transfer ownership of all or part of the position. Implements
+    -- "ownership transfer" and "trading" lifecycle stages. Splitting a
+    -- position creates a remainder contract for the current owner and a
+    -- new contract for the transferee.
+    choice TransferBond : ContractId GovernmentBond
+      with
+        newOwner    : Party
+        transferQty : Decimal
+        newInstrumentId : Text
+      controller owner
+      do
+        assertMsg "Bond must be Active to transfer" (status == Active)
+        assertMsg "Transfer quantity must be positive" (transferQty > 0.0)
+        assertMsg "Insufficient quantity" (transferQty <= quantity)
+        let remainder = quantity - transferQty
+        when (remainder > 0.0) $ do
+          _ <- create this with quantity = remainder
+          pure ()
+        create this with
+          owner = newOwner
+          quantity = transferQty
+          instrumentId = newInstrumentId
+
+    -- | Mark (a portion of) this position as collateralized, e.g. when
+    -- pledged into a repo. The owner's wallet additionally records the
+    -- lock via `Wallet.LockCollateral`; this choice updates the
+    -- instrument's own lifecycle status for ledger-wide visibility.
+    choice MarkCollateralized : ContractId GovernmentBond
+      controller owner
+      do
+        assertMsg "Only Active bonds can be collateralized" (status == Active)
+        create this with status = Collateralized
+
+    -- | Release a previously collateralized position back to Active
+    -- (repo repurchased / margin released).
+    choice ReleaseCollateral : ContractId GovernmentBond
+      controller owner
+      do
+        assertMsg "Bond must be Collateralized to release" (status == Collateralized)
+        create this with status = Active
+
+    -- | Maturity: the issuer redeems the bond for cash. Implements the
+    -- "maturity" lifecycle stage. The bond is archived (terminal) and the
+    -- issuer issues a TokenizedDeposit to the owner for principal +
+    -- accrued final coupon.
+    choice RedeemAtMaturity : ContractId TokenizedDeposit
+      with
+        asOfDate        : Date
+        finalCouponAmt  : Decimal
+        redemptionDepId : Text
+        issuedAt        : Time
+      controller owner
+      do
+        assertMsg "Bond must be Active to redeem" (status == Active)
+        assertMsg "Redemption can only occur on or after maturity" (asOfDate >= maturityDate)
+        let principal = faceValuePerUnit * quantity
+            proceeds  = principal + finalCouponAmt
+        create TokenizedDeposit with
+          bank = issuer
+          owner
+          regulator
+          depositId = redemptionDepId
+          currency
+          amount = proceeds
+          issuedAt
+          frozen = False
+
+-- | Issuance request: the issuer (sovereign debt agency / primary dealer)
+-- issues new bonds directly into a KYC-verified owner's holdings.
+template GovernmentBondIssuance
+  with
+    issuer       : Party
+    owner        : Party
+    custodian    : Party
+    regulator    : Party
+    instrumentId : Text
+    isin         : Text
+    currency     : Text
+    faceValuePerUnit : Decimal
+    quantity         : Decimal
+    couponRatePct    : Decimal
+    issueDate        : Date
+    maturityDate     : Date
+  where
+    signatory issuer
+    observer owner, custodian, regulator
+
+    ensure quantity > 0.0 && faceValuePerUnit > 0.0 && maturityDate > issueDate
+
+    choice IssueBond : ContractId GovernmentBond
+      controller issuer
+      do
+        create GovernmentBond with
+          issuer
+          owner
+          custodian
+          regulator
+          instrumentId
+          isin
+          currency
+          faceValuePerUnit
+          quantity
+          couponRatePct
+          issueDate
+          maturityDate
+          status = Active
+
+-- =============================================================================
+-- Treasury Bill (discount instrument)
+-- =============================================================================
+
+-- | A tokenized treasury bill: a short-dated, zero-coupon discount
+-- instrument. Purchased below face value; redeemed at face value at
+-- maturity. Lifecycle mirrors GovernmentBond (issuance, transfer, trading,
+-- collateralization, maturity).
+template TreasuryBill
+  with
+    issuer           : Party
+    owner            : Party
+    custodian        : Party
+    regulator        : Party
+    instrumentId     : Text
+    isin             : Text
+    currency         : Text
+    faceValuePerUnit : Decimal
+    purchasePricePerUnit : Decimal
+    quantity         : Decimal
+    issueDate        : Date
+    maturityDate     : Date
+    status           : InstrumentStatus
+  where
+    signatory issuer
+    observer owner, custodian, regulator
+
+    ensure quantity > 0.0
+       && faceValuePerUnit > 0.0
+       && purchasePricePerUnit > 0.0
+       && purchasePricePerUnit <= faceValuePerUnit
+
+    key (issuer, instrumentId, owner) : (Party, Text, Party)
+    maintainer issuer
+
+    choice TransferBill : ContractId TreasuryBill
+      with
+        newOwner        : Party
+        transferQty     : Decimal
+        newInstrumentId : Text
+      controller owner
+      do
+        assertMsg "T-Bill must be Active to transfer" (status == Active)
+        assertMsg "Transfer quantity must be positive" (transferQty > 0.0)
+        assertMsg "Insufficient quantity" (transferQty <= quantity)
+        let remainder = quantity - transferQty
+        when (remainder > 0.0) $ do
+          _ <- create this with quantity = remainder
+          pure ()
+        create this with
+          owner = newOwner
+          quantity = transferQty
+          instrumentId = newInstrumentId
+
+    choice MarkBillCollateralized : ContractId TreasuryBill
+      controller owner
+      do
+        assertMsg "Only Active T-Bills can be collateralized" (status == Active)
+        create this with status = Collateralized
+
+    choice ReleaseBillCollateral : ContractId TreasuryBill
+      controller owner
+      do
+        assertMsg "T-Bill must be Collateralized to release" (status == Collateralized)
+        create this with status = Active
+
+    -- | Redemption at maturity for full face value (discount instrument:
+    -- the holder's yield is faceValue - purchasePrice).
+    choice RedeemBillAtMaturity : ContractId TokenizedDeposit
+      with
+        asOfDate        : Date
+        redemptionDepId : Text
+        issuedAt        : Time
+      controller owner
+      do
+        assertMsg "T-Bill must be Active to redeem" (status == Active)
+        assertMsg "Redemption can only occur on or after maturity" (asOfDate >= maturityDate)
+        create TokenizedDeposit with
+          bank = issuer
+          owner
+          regulator
+          depositId = redemptionDepId
+          currency
+          amount = faceValuePerUnit * quantity
+          issuedAt
+          frozen = False
+
+-- | Issuance request for treasury bills (e.g. via primary-dealer auction).
+template TreasuryBillIssuance
+  with
+    issuer       : Party
+    owner        : Party
+    custodian    : Party
+    regulator    : Party
+    instrumentId : Text
+    isin         : Text
+    currency     : Text
+    faceValuePerUnit     : Decimal
+    purchasePricePerUnit : Decimal
+    quantity     : Decimal
+    issueDate    : Date
+    maturityDate : Date
+  where
+    signatory issuer
+    observer owner, custodian, regulator
+
+    ensure quantity > 0.0
+       && faceValuePerUnit > 0.0
+       && purchasePricePerUnit > 0.0
+       && purchasePricePerUnit <= faceValuePerUnit
+       && maturityDate > issueDate
+
+    choice IssueTreasuryBill : ContractId TreasuryBill
+      controller issuer
+      do
+        create TreasuryBill with
+          issuer
+          owner
+          custodian
+          regulator
+          instrumentId
+          isin
+          currency
+          faceValuePerUnit
+          purchasePricePerUnit
+          quantity
+          issueDate
+          maturityDate
+          status = Active

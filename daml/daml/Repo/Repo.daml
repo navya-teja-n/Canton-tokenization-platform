@@ -1,0 +1,294 @@
+module Repo.Repo where
+
+import DA.Date (subDate)
+import Roles.Types
+import Assets.Bond
+import Assets.Deposit
+
+-- =============================================================================
+-- Repurchase Agreements (Repo / Reverse Repo) -- Treasury collateral
+-- =============================================================================
+--
+-- A repo is economically: borrower (cash-taker) delivers collateral
+-- (a GovernmentBond position) to lender (cash-provider) in exchange for cash
+-- (a TokenizedDeposit) "today", with an agreement to reverse the exchange
+-- ("repurchase") at `maturityDate`, paying back principal + repo interest.
+--
+-- "Reverse repo" is the same contract viewed from the cash-provider's side:
+-- `ReverseRepoProposal` lets the *lender* initiate by offering cash against
+-- a borrower's posted collateral. Both proposal flavours settle into the
+-- same `RepoAgreement` template, so downstream lifecycle (maturity,
+-- repurchase, default) is handled uniformly.
+
+-- -----------------------------------------------------------------------------
+-- Proposal initiated by the borrower (classic "repo": I post collateral for cash)
+-- -----------------------------------------------------------------------------
+template RepoProposal
+  with
+    borrower     : Party
+    lender       : Party
+    regulator    : Party
+    repoId       : Text
+    collateralInstrumentId : Text
+    collateralQty          : Decimal
+    principal    : Money
+    repoRatePct  : Decimal   -- annualized repo rate, e.g. 5.25 for 5.25%
+    startDate    : Date
+    maturityDate : Date
+  where
+    signatory borrower
+    observer lender, regulator
+
+    ensure collateralQty > 0.0 && principal.amount > 0.0 && maturityDate > startDate
+
+    -- | Lender accepts: atomic exchange of collateral for cash (DvP), and
+    -- the collateral position is flagged Collateralized for the duration
+    -- of the repo. Produces the open `RepoAgreement`.
+    choice AcceptRepo : ContractId RepoAgreement
+      with
+        collateralCid        : ContractId GovernmentBond
+        cashCid              : ContractId TokenizedDeposit
+        settledCollateralId  : Text
+        settledCashDepositId : Text
+        openedAt             : Time
+      controller lender
+      do
+        collateralTransferred <- exercise collateralCid TransferBond with
+          newOwner = lender
+          transferQty = collateralQty
+          newInstrumentId = settledCollateralId
+
+        collateralLocked <- exercise collateralTransferred MarkCollateralized
+
+        cashTransferred <- exercise cashCid PayTo with
+          payee = borrower
+          payAmount = principal.amount
+          newDepositId = settledCashDepositId
+
+        create RepoAgreement with
+          borrower, lender, regulator, repoId
+          collateralInstrumentId = settledCollateralId
+          collateralQty
+          principal
+          repoRatePct
+          startDate
+          maturityDate
+          collateralCid = collateralLocked
+          status = RepoOpen
+
+    -- | Lender declines the proposal.
+    choice RejectRepo : ()
+      controller lender
+      do pure ()
+
+    -- | Borrower withdraws the proposal before acceptance.
+    choice CancelRepoProposal : ()
+      controller borrower
+      do pure ()
+
+-- -----------------------------------------------------------------------------
+-- Proposal initiated by the lender (classic "reverse repo": I offer cash
+-- against your collateral)
+-- -----------------------------------------------------------------------------
+template ReverseRepoProposal
+  with
+    lender       : Party
+    borrower     : Party
+    regulator    : Party
+    repoId       : Text
+    collateralInstrumentId : Text
+    collateralQty          : Decimal
+    principal    : Money
+    repoRatePct  : Decimal
+    startDate    : Date
+    maturityDate : Date
+  where
+    signatory lender
+    observer borrower, regulator
+
+    ensure collateralQty > 0.0 && principal.amount > 0.0 && maturityDate > startDate
+
+    -- | Borrower accepts the cash-for-collateral offer; settlement is
+    -- identical (atomic DvP) to `AcceptRepo`.
+    choice AcceptReverseRepo : ContractId RepoAgreement
+      with
+        collateralCid        : ContractId GovernmentBond
+        cashCid              : ContractId TokenizedDeposit
+        settledCollateralId  : Text
+        settledCashDepositId : Text
+        openedAt             : Time
+      controller borrower
+      do
+        collateralTransferred <- exercise collateralCid TransferBond with
+          newOwner = lender
+          transferQty = collateralQty
+          newInstrumentId = settledCollateralId
+
+        collateralLocked <- exercise collateralTransferred MarkCollateralized
+
+        cashTransferred <- exercise cashCid PayTo with
+          payee = borrower
+          payAmount = principal.amount
+          newDepositId = settledCashDepositId
+
+        create RepoAgreement with
+          borrower, lender, regulator, repoId
+          collateralInstrumentId = settledCollateralId
+          collateralQty
+          principal
+          repoRatePct
+          startDate
+          maturityDate
+          collateralCid = collateralLocked
+          status = RepoOpen
+
+    choice RejectReverseRepo : ()
+      controller borrower
+      do pure ()
+
+    choice CancelReverseRepoProposal : ()
+      controller lender
+      do pure ()
+
+-- -----------------------------------------------------------------------------
+-- Active repo agreement: collateral locked with lender, cash delivered to
+-- borrower. Lifecycle: RepoOpen -> RepoMatured -> RepoClosed | RepoDefaulted.
+-- -----------------------------------------------------------------------------
+template RepoAgreement
+  with
+    borrower     : Party
+    lender       : Party
+    regulator    : Party
+    repoId       : Text
+    collateralInstrumentId : Text
+    collateralQty          : Decimal
+    principal    : Money
+    repoRatePct  : Decimal
+    startDate    : Date
+    maturityDate : Date
+    collateralCid : ContractId GovernmentBond  -- held by lender, status = Collateralized
+    status        : RepoStatus
+  where
+    signatory borrower, lender
+    observer regulator
+
+    key (lender, repoId) : (Party, Text)
+    maintainer lender
+
+    -- | Compute the total amount due (principal + accrued repo interest)
+    -- as of a given date. Exposed as a non-consuming choice so the backend
+    -- can quote the repurchase price without mutating state.
+    nonconsuming choice QuoteRepurchaseAmount : Decimal
+      with
+        asOfDate : Date
+      controller borrower
+      do
+        let days = subDate asOfDate startDate
+            interest = accrueInterest principal.amount repoRatePct days
+        pure (principal.amount + interest)
+
+    -- | Orchestration marks the repo as matured once `maturityDate` is
+    -- reached (an event-driven trigger -- see backend `events` module).
+    choice MarkMatured : ContractId RepoAgreement
+      with
+        asOfDate : Date
+      controller lender
+      do
+        assertMsg "Repo must be Open to mature" (status == RepoOpen)
+        assertMsg "Cannot mark matured before the maturity date" (asOfDate >= maturityDate)
+        create this with status = RepoMatured
+
+    -- | Borrower repurchases the collateral: pays principal + accrued
+    -- interest to the lender and receives the collateral back, released
+    -- from Collateralized status. Atomic DvP settlement; produces a
+    -- `RepoClosedRecord` audit trail and archives this agreement.
+    choice Repurchase : ContractId RepoClosedRecord
+      with
+        repoCashCid          : ContractId TokenizedDeposit
+        asOfDate             : Date
+        repaymentDepositId   : Text
+        returnedInstrumentId : Text
+        closedAt             : Time
+      controller borrower
+      do
+        assertMsg "Repo must be Open or Matured to repurchase"
+          (status == RepoOpen || status == RepoMatured)
+
+        let days = subDate asOfDate startDate
+            interest = accrueInterest principal.amount repoRatePct days
+            totalDue = principal.amount + interest
+
+        cashAfter <- exercise repoCashCid PayTo with
+          payee = lender
+          payAmount = totalDue
+          newDepositId = repaymentDepositId
+
+        collateralReturned <- exercise collateralCid TransferBond with
+          newOwner = borrower
+          transferQty = collateralQty
+          newInstrumentId = returnedInstrumentId
+
+        _ <- exercise collateralReturned ReleaseCollateral
+
+        create RepoClosedRecord with
+          borrower, lender, regulator, repoId
+          collateralInstrumentId = returnedInstrumentId
+          collateralQty
+          principal
+          interestPaid = interest
+          startDate
+          maturityDate
+          closedAt
+          outcome = RepoClosed
+
+    -- | Lender declares default if the borrower has not repurchased by
+    -- `maturityDate` (plus any grace period enforced by orchestration).
+    -- The lender retains the collateral permanently (it stays in the
+    -- lender's wallet, simply released from the Collateralized flag so it
+    -- becomes a freely tradable position for the lender).
+    choice DeclareDefault : ContractId RepoClosedRecord
+      with
+        asOfDate : Date
+        releasedInstrumentId : Text
+        declaredAt : Time
+      controller lender
+      do
+        assertMsg "Repo must be Matured to declare default" (status == RepoMatured)
+        assertMsg "Default can only be declared after maturity" (asOfDate > maturityDate)
+
+        collateralForfeited <- exercise collateralCid TransferBond with
+          newOwner = lender
+          transferQty = collateralQty
+          newInstrumentId = releasedInstrumentId
+
+        _ <- exercise collateralForfeited ReleaseCollateral
+
+        create RepoClosedRecord with
+          borrower, lender, regulator, repoId
+          collateralInstrumentId = releasedInstrumentId
+          collateralQty
+          principal
+          interestPaid = 0.0
+          startDate
+          maturityDate
+          closedAt = declaredAt
+          outcome = RepoDefaulted
+
+-- | Immutable audit record of a closed repo (repurchased or defaulted).
+template RepoClosedRecord
+  with
+    borrower     : Party
+    lender       : Party
+    regulator    : Party
+    repoId       : Text
+    collateralInstrumentId : Text
+    collateralQty          : Decimal
+    principal    : Money
+    interestPaid : Decimal
+    startDate    : Date
+    maturityDate : Date
+    closedAt     : Time
+    outcome      : RepoStatus
+  where
+    signatory borrower, lender
+    observer regulator

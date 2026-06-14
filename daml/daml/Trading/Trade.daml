@@ -1,0 +1,172 @@
+module Trading.Trade where
+
+import Roles.Types
+import Assets.Bond
+import Assets.Deposit
+
+-- =============================================================================
+-- Delivery-vs-Payment (DvP) trade workflow for Government Bonds
+-- =============================================================================
+--
+-- Pattern: the seller creates a `BondTradeProposal` (seller is the sole
+-- signatory). The buyer reviews it (observer) and exercises `AcceptAndSettle`,
+-- supplying the ContractIds of the bond position to be delivered and the
+-- cash deposit to be paid. Because the proposal's signatory set (seller) is
+-- combined with the choice controller's authority (buyer) for the duration
+-- of the choice, the single atomic transaction can simultaneously:
+--   1. Transfer the bond from seller -> buyer (`TransferBond`, controller = seller)
+--   2. Pay cash from buyer -> seller (`PayTo`, controller = buyer)
+-- If either step fails (e.g. insufficient quantity / insufficient cash /
+-- frozen deposit), the whole transaction rolls back -- this is the DvP
+-- atomicity guarantee.
+template BondTradeProposal
+  with
+    seller    : Party
+    buyer     : Party
+    regulator : Party
+    tradeId   : Text
+    instrumentId : Text  -- the bond instrumentId being sold
+    quantity     : Decimal
+    price        : Money -- total consideration to be paid by buyer
+    status       : TradeStatus
+  where
+    signatory seller
+    observer buyer, regulator
+
+    ensure quantity > 0.0 && price.amount > 0.0
+
+    -- | Buyer accepts the proposal and settlement happens atomically (DvP).
+    choice AcceptAndSettle : ExecutedTrade
+      with
+        bondCid          : ContractId GovernmentBond
+        cashCid          : ContractId TokenizedDeposit
+        settledBondId    : Text
+        settledDepositId : Text
+        settledAt        : Time
+      controller buyer
+      do
+        bondAfter <- exercise bondCid TransferBond with
+          newOwner = buyer
+          transferQty = quantity
+          newInstrumentId = settledBondId
+
+        cashAfter <- exercise cashCid PayTo with
+          payee = seller
+          payAmount = price.amount
+          newDepositId = settledDepositId
+
+        create ExecutedTrade with
+          seller, buyer, regulator, tradeId
+          instrumentId, quantity, price
+          settledBondCid = bondAfter
+          settledCashCid = cashAfter
+          settledAt
+
+    -- | Buyer declines the proposal.
+    choice Reject : ContractId BondTradeProposal
+      with
+        reason : Text
+      controller buyer
+      do
+        create this with status = Rejected
+
+    -- | Seller withdraws the proposal before acceptance.
+    choice Cancel : ContractId BondTradeProposal
+      controller seller
+      do
+        create this with status = Cancelled
+
+-- | Immutable record of a settled trade -- used by the backend for
+-- transaction history / audit trail. Both parties and the regulator can see
+-- it; no further choices mutate it (terminal state).
+template ExecutedTrade
+  with
+    seller    : Party
+    buyer     : Party
+    regulator : Party
+    tradeId   : Text
+    instrumentId : Text
+    quantity     : Decimal
+    price        : Money
+    settledBondCid : ContractId GovernmentBond
+    settledCashCid : ContractId TokenizedDeposit
+    settledAt      : Time
+  where
+    signatory seller, buyer
+    observer regulator
+
+-- =============================================================================
+-- DvP trade workflow for Treasury Bills (mirrors BondTradeProposal)
+-- =============================================================================
+
+template BillTradeProposal
+  with
+    seller    : Party
+    buyer     : Party
+    regulator : Party
+    tradeId   : Text
+    instrumentId : Text
+    quantity     : Decimal
+    price        : Money
+    status       : TradeStatus
+  where
+    signatory seller
+    observer buyer, regulator
+
+    ensure quantity > 0.0 && price.amount > 0.0
+
+    choice AcceptAndSettleBill : ExecutedTrade
+      with
+        billCid          : ContractId TreasuryBill
+        cashCid          : ContractId TokenizedDeposit
+        settledBillId    : Text
+        settledDepositId : Text
+        settledAt        : Time
+      controller buyer
+      do
+        billAfter <- exercise billCid TransferBill with
+          newOwner = buyer
+          transferQty = quantity
+          newInstrumentId = settledBillId
+
+        cashAfter <- exercise cashCid PayTo with
+          payee = seller
+          payAmount = price.amount
+          newDepositId = settledDepositId
+
+        -- Re-use ExecutedTrade as a generic settlement record; the bill's
+        -- ContractId is encoded by storing it via a parallel record to
+        -- avoid widening ExecutedTrade's type. See ExecutedBillTrade below.
+        create ExecutedBillTrade with
+          seller, buyer, regulator, tradeId
+          instrumentId, quantity, price
+          settledBillCid = billAfter
+          settledCashCid = cashAfter
+          settledAt
+
+    choice RejectBill : ContractId BillTradeProposal
+      with reason : Text
+      controller buyer
+      do
+        create this with status = Rejected
+
+    choice CancelBill : ContractId BillTradeProposal
+      controller seller
+      do
+        create this with status = Cancelled
+
+template ExecutedBillTrade
+  with
+    seller    : Party
+    buyer     : Party
+    regulator : Party
+    tradeId   : Text
+    instrumentId : Text
+    quantity     : Decimal
+    price        : Money
+    settledBillCid : ContractId TreasuryBill
+    settledCashCid : ContractId TokenizedDeposit
+    settledAt      : Time
+  where
+    signatory seller, buyer
+    observer regulator
