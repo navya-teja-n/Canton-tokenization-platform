@@ -103,13 +103,13 @@ public class WalletService {
         List<WalletHolding> holdings = new java.util.ArrayList<>(wallet.holdings());
         var existing = holdings.stream().filter(h -> h.instrumentId().equals(instrumentId) && !h.locked()).findFirst()
                 .orElseThrow(() -> new InsufficientBalanceException("No unlocked holding for instrument " + instrumentId + " in wallet " + walletId));
-        if (existing.get().quantity().compareTo(quantity) < 0) {
+        if (existing.quantity().compareTo(quantity) < 0) {
             throw new InsufficientBalanceException("Insufficient unlocked balance of " + instrumentId + " in wallet " + walletId);
         }
-        holdings.remove(existing.get());
-        BigDecimal remaining = existing.get().quantity().subtract(quantity);
+        holdings.remove(existing);
+        BigDecimal remaining = existing.quantity().subtract(quantity);
         if (remaining.compareTo(BigDecimal.ZERO) > 0) {
-            holdings.add(existing.get().withQuantity(remaining));
+            holdings.add(existing.withQuantity(remaining));
         }
         return replace(walletId, wallet.withHoldings(holdings));
     }
@@ -120,13 +120,13 @@ public class WalletService {
         List<WalletHolding> holdings = new java.util.ArrayList<>(wallet.holdings());
         var existing = holdings.stream().filter(h -> h.instrumentId().equals(instrumentId) && !h.locked()).findFirst()
                 .orElseThrow(() -> new InsufficientBalanceException("No unlocked holding for instrument " + instrumentId + " in wallet " + walletId));
-        if (existing.get().quantity().compareTo(quantity) < 0) {
+        if (existing.quantity().compareTo(quantity) < 0) {
             throw new InsufficientBalanceException("Insufficient unlocked balance to lock for " + instrumentId);
         }
-        holdings.remove(existing.get());
-        BigDecimal remaining = existing.get().quantity().subtract(quantity);
+        holdings.remove(existing);
+        BigDecimal remaining = existing.quantity().subtract(quantity);
         if (remaining.compareTo(BigDecimal.ZERO) > 0) {
-            holdings.add(existing.get().withQuantity(remaining));
+            holdings.add(existing.withQuantity(remaining));
         }
         var lockedExisting = holdings.stream().filter(h -> h.instrumentId().equals(instrumentId) && h.locked()).findFirst();
         if (lockedExisting.isPresent()) {
@@ -145,13 +145,13 @@ public class WalletService {
         List<WalletHolding> holdings = new java.util.ArrayList<>(wallet.holdings());
         var existing = holdings.stream().filter(h -> h.instrumentId().equals(instrumentId) && h.locked()).findFirst()
                 .orElseThrow(() -> new InsufficientBalanceException("No locked holding for instrument " + instrumentId + " in wallet " + walletId));
-        if (existing.get().quantity().compareTo(quantity) < 0) {
+        if (existing.quantity().compareTo(quantity) < 0) {
             throw new InsufficientBalanceException("Insufficient locked balance to release for " + instrumentId);
         }
-        holdings.remove(existing.get());
-        BigDecimal remainingLocked = existing.get().quantity().subtract(quantity);
+        holdings.remove(existing);
+        BigDecimal remainingLocked = existing.quantity().subtract(quantity);
         if (remainingLocked.compareTo(BigDecimal.ZERO) > 0) {
-            holdings.add(existing.get().withQuantity(remainingLocked));
+            holdings.add(existing.withQuantity(remainingLocked));
         }
         var unlockedExisting = holdings.stream().filter(h -> h.instrumentId().equals(instrumentId) && !h.locked()).findFirst();
         if (unlockedExisting.isPresent()) {
@@ -159,7 +159,7 @@ public class WalletService {
             holdings.remove(uh);
             holdings.add(uh.withQuantity(uh.quantity().add(quantity)));
         } else {
-            holdings.add(WalletHolding.builder().assetClass(existing.get().assetClass()).instrumentId(instrumentId).quantity(quantity).locked(false).build());
+            holdings.add(WalletHolding.builder().assetClass(existing.assetClass()).instrumentId(instrumentId).quantity(quantity).locked(false).build());
         }
         return replace(walletId, wallet.withHoldings(holdings));
     }
@@ -185,11 +185,11 @@ public class WalletService {
         List<Money> balances = new java.util.ArrayList<>(wallet.cashBalances());
         var existing = balances.stream().filter(m -> m.currency().equals(amount.currency())).findFirst()
                 .orElseThrow(() -> new InsufficientBalanceException("No cash balance in currency " + amount.currency() + " for wallet " + walletId));
-        if (existing.get().amount().compareTo(amount.amount()) < 0) {
+        if (existing.amount().compareTo(amount.amount()) < 0) {
             throw new InsufficientBalanceException("Insufficient cash balance in wallet " + walletId);
         }
-        balances.remove(existing.get());
-        balances.add(existing.get().subtract(amount));
+        balances.remove(existing);
+        balances.add(existing.subtract(amount));
         return replace(walletId, wallet.withCashBalances(balances));
     }
 
