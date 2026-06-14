@@ -1,0 +1,27 @@
+name: Keep Backend Alive
+
+# Render's free tier spins a web service down after ~15 minutes without
+# inbound traffic, leading to a ~30-60s "cold start" for the next visitor.
+# This workflow pings the backend's health endpoint every 10 minutes to
+# keep it warm.
+#
+# Quota note: a service that is "spun down" does not consume Render's free
+# 750 instance-hours/month, but a service kept warm 24/7 uses roughly
+# 24 * 31 = 744 hours in a 31-day month -- just under the 750-hour cap, with
+# no headroom for a second always-on free service on the same account. If
+# you add another always-on free service, either widen the cron interval
+# (allowing brief spin-downs) or disable this workflow.
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch: {}
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping backend health endpoint
+        run: |
+          curl -fsS --max-time 30 "https://canton-tokenization-platform.onrender.com/actuator/health" \
+            && echo "Backend is up" \
+            || echo "Backend did not respond (it may be cold-starting)"

@@ -4,6 +4,7 @@ import { useParty, KNOWN_PARTIES } from '../context/PartyContext.jsx'
 import { useFetch } from '../hooks/useFetch.js'
 import { ErrorBanner, SuccessBanner } from '../components/Banner.jsx'
 import { formatMoney, formatQty } from '../components/Money.jsx'
+import RoleGlossary from '../components/RoleGlossary.jsx'
 
 function emptyForm(party) {
   return {
@@ -50,6 +51,8 @@ export default function WalletsPage() {
           <span className="mono">regulator</span>. Opening a wallet requires the owner to hold an active KYC approval.
         </p>
       </div>
+
+      <RoleGlossary />
 
       <ErrorBanner error={error} />
       <SuccessBanner message={success} />

@@ -4,6 +4,7 @@ import { useParty, KNOWN_PARTIES } from '../context/PartyContext.jsx'
 import { useFetch } from '../hooks/useFetch.js'
 import StatusBadge from '../components/StatusBadge.jsx'
 import { ErrorBanner, SuccessBanner } from '../components/Banner.jsx'
+import RoleGlossary from '../components/RoleGlossary.jsx'
 
 const RISK_RATINGS = ['LOW', 'MEDIUM', 'HIGH']
 
@@ -92,6 +93,8 @@ export default function KycPage() {
           requires the involved parties to hold an active <span className="mono">KycApproval</span>.
         </p>
       </div>
+
+      <RoleGlossary />
 
       <ErrorBanner error={error} />
       <SuccessBanner message={success} />

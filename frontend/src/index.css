@@ -311,3 +311,55 @@ button:disabled {
 .section-gap {
   margin-top: 24px;
 }
+
+.role-glossary {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 14px;
+  margin-bottom: 20px;
+  font-size: 13px;
+}
+
+.role-glossary summary {
+  cursor: pointer;
+  color: var(--text-muted);
+  font-weight: 600;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 4px 0;
+}
+
+.role-glossary summary:hover {
+  color: var(--text);
+}
+
+.role-glossary dl {
+  margin: 10px 0 2px;
+  display: grid;
+  grid-template-columns: minmax(160px, 220px) 1fr;
+  gap: 8px 16px;
+}
+
+.role-glossary dt {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.role-glossary dd {
+  margin: 0;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+@media (max-width: 720px) {
+  .role-glossary dl {
+    grid-template-columns: 1fr;
+    gap: 2px 0;
+  }
+
+  .role-glossary dd {
+    margin-bottom: 6px;
+  }
+}

@@ -38,3 +38,10 @@ platform:
     multiplier: 2.0
   idempotency:
     ttl-seconds: 3600
+  seed:
+    # Populates the in-memory ledger with a reference portfolio (KYC
+    # approvals, wallets, instruments, deposits, a pending trade and a
+    # pending repo) on every startup, so the dashboard is never empty --
+    # important because the ledger resets on restart. Set to false to
+    # start with an empty ledger.
+    enabled: true
